@@ -1,6 +1,6 @@
 """
 ResearchMCP 服务器核心入口
-实现 `deep_web_search`, `resilient_web_fetch`, `web_map_analyze` 三大核心工具。
+实现 `search_web`, `fetch_page`, `map_docs_site` 三大核心工具。
 """
 
 import asyncio
@@ -237,9 +237,9 @@ async def _run_follow_up(query: str, sources: list[dict], ctx: Context = None) -
 
     if route == "map":
         map_url = _select_map_url(query, sources)
-        await _debug_log(ctx, f"deep_web_search route=map selected_map_url={map_url!r}")
+        await _debug_log(ctx, f"search_web route=map selected_map_url={map_url!r}")
         if map_url:
-            map_result = await web_map_analyze(map_url, max_depth=1, limit=10, ctx=ctx)
+            map_result = await map_docs_site(map_url, max_depth=1, limit=10, ctx=ctx)
             if _is_usable_follow_up_content(map_result):
                 orchestration_path.append("map")
                 mapped_url = map_url
@@ -247,13 +247,13 @@ async def _run_follow_up(query: str, sources: list[dict], ctx: Context = None) -
             else:
                 await _debug_log(
                     ctx,
-                    f"deep_web_search ignored_map_url={map_url} reason=unusable_follow_up_output",
+                    f"search_web ignored_map_url={map_url} reason=unusable_follow_up_output",
                 )
     elif route == "fetch":
         selected_fetch_urls = _select_fetch_urls(query, sources, limit=2)
-        await _debug_log(ctx, f"deep_web_search route=fetch selected_fetch_urls={selected_fetch_urls!r}")
+        await _debug_log(ctx, f"search_web route=fetch selected_fetch_urls={selected_fetch_urls!r}")
         for url in selected_fetch_urls:
-            markdown = await resilient_web_fetch(url, ctx=ctx)
+            markdown = await fetch_page(url, ctx=ctx)
             if _is_usable_follow_up_content(markdown):
                 fetched_urls.append(url)
                 if "fetch" not in orchestration_path:
@@ -264,10 +264,10 @@ async def _run_follow_up(query: str, sources: list[dict], ctx: Context = None) -
             else:
                 await _debug_log(
                     ctx,
-                    f"deep_web_search ignored_fetch_url={url} reason=unusable_follow_up_output",
+                    f"search_web ignored_fetch_url={url} reason=unusable_follow_up_output",
                 )
     else:
-        await _debug_log(ctx, "deep_web_search route=search selected_fetch_urls=[] selected_map_url=''")
+        await _debug_log(ctx, "search_web route=search selected_fetch_urls=[] selected_map_url=''")
 
     return orchestration_path, evidence_sections, fetched_urls, mapped_url
 
@@ -275,14 +275,13 @@ async def _run_follow_up(query: str, sources: list[dict], ctx: Context = None) -
 # ── MCP 工具 1：深度网络总览搜素 ─────────────────────────────────
 
 @mcp.tool(
-    name="deep_web_search",
+    name="search_web",
     description=(
-        "Use once per distinct research question to get a concise evidence-backed web answer. "
-        "Do not call it repeatedly with near-duplicate queries. Returns the answer body, the total source count, "
-        "a lightweight preview of the top sources, and control hints describing whether to answer, refine, or fallback."
+        "针对一个明确问题进行网页搜索与归纳，返回答案、来源预览和下一步建议。"
+        "不要对近似问题反复调用。"
     ),
 )
-async def deep_web_search(
+async def search_web(
     query: Annotated[str, "The search query in natural language."],
     platform: Annotated[str, "Optional target platform (e.g., 'GitHub', 'Reddit')."] = "",
     extra_sources: Annotated[int, "Number of extra web sources to fetch concurrently."] = 0,
@@ -291,7 +290,7 @@ async def deep_web_search(
     """
     执行深度人工智能检索，聚合答案与轻量信源预览。
     """
-    await log_info(ctx, f"Starting deep_web_search for: {query}", config.debug_enabled)
+    await log_info(ctx, f"Starting search_web for: {query}", config.debug_enabled)
 
     try:
         api_url = config.grok_api_url
@@ -362,7 +361,7 @@ async def deep_web_search(
     orchestration_path, evidence_sections, fetched_urls, mapped_url = await _run_follow_up(query, all_sources, ctx)
     await _debug_log(
         ctx,
-        f"deep_web_search follow_up_summary orchestration_path={orchestration_path!r} "
+        f"search_web follow_up_summary orchestration_path={orchestration_path!r} "
         f"fetched_urls={fetched_urls!r} mapped_url={mapped_url!r}",
     )
 
@@ -379,7 +378,7 @@ async def deep_web_search(
     evidence_status, recommended_action = _classify_search_result(answer, all_sources)
     await _debug_log(
         ctx,
-        f"deep_web_search result_summary orchestration_path={orchestration_path!r} "
+        f"search_web result_summary orchestration_path={orchestration_path!r} "
         f"fetched_urls={fetched_urls!r} mapped_url={mapped_url!r} "
         f"evidence_status={evidence_status} recommended_action={recommended_action}",
     )
@@ -453,13 +452,13 @@ async def _call_firecrawl_scrape(url: str, ctx=None) -> str | None:
 # ── MCP 工具 3：强降级提取网页 ─────────────────────────────────
 
 @mcp.tool(
-    name="resilient_web_fetch",
+    name="fetch_page",
     description=(
-        "Use this only for a specific URL you already selected and need to read in full. "
-        "It fetches one webpage and returns high-fidelity Markdown. Do not use it for broad discovery."
+        "读取你已经选定的单个网页正文，返回高保真 Markdown。"
+        "不要用它做大范围搜索。"
     ),
 )
-async def resilient_web_fetch(
+async def fetch_page(
     url: Annotated[str, "HTTP/HTTPS target URL point to the article/webpage."],
     ctx: Context = None,
 ) -> str:
@@ -489,13 +488,13 @@ async def resilient_web_fetch(
 # ── MCP 工具 4：大范围网络拓扑 ─────────────────────────────────
 
 @mcp.tool(
-    name="web_map_analyze",
+    name="map_docs_site",
     description=(
-        "Use this for a documentation site or content hub when you need site structure discovery. "
-        "It maps URLs across a site. Do not use it for ordinary fact lookup."
+        "分析文档站点的页面结构与链接分布，适合梳理目录、导航和相关页面。"
+        "不适合普通事实问答。"
     ),
 )
-async def web_map_analyze(
+async def map_docs_site(
     url: Annotated[str, "The starting URL to analyze."],
     max_depth: Annotated[int, "Max depth to crawl (1-5)."] = 1,
     limit: Annotated[int, "Max number of total links to process."] = 50,
